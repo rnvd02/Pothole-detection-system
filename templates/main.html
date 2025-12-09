@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Pothole Detection System</title>
+  <script src="https://kit.fontawesome.com/8751abb40d.js" crossorigin="anonymous"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    body {
+      font-family: 'Inter', sans-serif;
+      margin: 0; padding: 0;
+      height: 100vh;
+      display: flex; justify-content: center; align-items: center;
+      overflow: auto;
+      background: #2b2d42; color: #edf2f4;
+    }
+    .background {
+      position: fixed; top: 0; left: 0;
+      width: 100%; height: 100%; z-index: -1;
+      animation: fadeImages 30s infinite;
+      background-color: #2b2d42; background-size: cover;
+      background-position: center;
+    }
+    @keyframes fadeImages {
+      0%   { background-image: url('/static/pothole_bg1.jpg'); }
+      25%  { background-image: url('/static/pothole_bg5.jpg'); }
+      50%  { background-image: url('/static/pothole_bg3.jpg'); }
+      75%  { background-image: url('/static/pothole_bg6.jpg'); }
+      100% { background-image: url('/static/pothole_bg2.jpg'); }
+    }
+    .container {
+      background: rgba(43,45,66,0.8);
+      border-radius: 15px; padding: 2.5em;
+      width: 90%; max-width: 400px;
+      text-align: center;
+      box-shadow: 0 8px 15px rgba(0,0,0,0.5);
+    }
+    h2 { font-size: 2.4em; font-weight:700; margin-bottom:1.5em; }
+    input {
+      width:80%; padding:10px; margin-top:1em;
+      border:none; border-radius:25px; font-size:1em;
+    }
+    button {
+      display:inline-block; width:100%; padding:15px;
+      background: linear-gradient(to right, #ef233c, #d90429);
+      color:#fff; font-size:1em; font-weight:600;
+      border:none; border-radius:25px; cursor: pointer;
+      margin-top:1em;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 15px rgba(223,50,60,0.6);
+    }
+    #status-message { color:#00b4d8; margin-top:10px; }
+    .spinner {
+      border:4px solid #f3f3f3; border-top:4px solid #3498db;
+      border-radius:50%; width:30px; height:30px;
+      animation: spin 2s linear infinite;
+      margin-top:10px;
+    }
+    @keyframes spin { from{transform:rotate(0deg);} to{transform:rotate(360deg);} }
+    .file-upload-container { display:flex; flex-direction:column; align-items:center; margin-top:1em; }
+    .file-upload-label {
+      font-size:1.2em; color:#fff; margin-bottom:0.5em;
+      display:inline-block; padding:10px 20px;
+      background: linear-gradient(to right, #00b4d8, #0077b6);
+      border-radius:25px; cursor:pointer; transition: background 0.3s;
+    }
+    .file-upload-input { display:none; }
+    .file-name-display { color:#fff; margin-top:0.5em; }
+    .popup {
+      display:none; position:fixed; top:50%; left:50%;
+      transform:translate(-50%,-50%);
+      background:#2b2d42; color:#edf2f4;
+      border-radius:15px; padding:2em;
+      box-shadow:0 4px 15px rgba(0,0,0,0.5); text-align:center;
+      z-index:1000;
+    }
+    .popup button:hover {
+      transform:translateY(-2px);
+      box-shadow:0 4px 15px rgba(223,50,60,0.6);
+    }
+  </style>
+  
+</head>
+<body>
+  <div class="background"></div>
+  <div class="container" id="login-page">
+    <h2>🚧 Pothole Detection</h2>
+    <input type="text" id="username" placeholder="Username" required>
+    <input type="password" id="password" placeholder="Password" required>
+    <button id="login-button">Login</button>
+    <p id="status-message"></p>
+  </div>
+
+  <div class="container page" id="capture-page" style="display:none;">
+    <h2>Pothole Detection - Capture Video</h2>
+    <div class="file-upload-container">
+      <label for="file-upload" class="file-upload-label">Choose File</label>
+      <input type="file" id="file-upload" accept="video/mp4" class="file-upload-input" required>
+      <div class="file-name-display" id="file-name-display">No file chosen</div>
+    </div>
+    <button id="process-button">Process Video</button>
+    <button id="go-to-map-button" style="margin-top:1em;">Go to Map</button>
+    <p id="status-message"></p>
+    <div id="loading-spinner" class="spinner" style="display:none;"></div>
+
+    <video id="output-video" controls
+           style="display:none; margin-top:20px; width:100%; border-radius:15px; box-shadow:0 4px 20px rgba(0,0,0,0.4);">
+      Your browser does not support HTML5 video.
+    </video>
+
+    <a id="download-link" href="#" download="processed_video.mp4"
+       style="display:none; margin-top:10px; color:#00b4d8; font-weight:600;">
+      ⬇️ Download Processed Video
+    </a>
+  </div>
+
+  <div class="popup" id="popup">
+    <h2>✅ Pothole Detection Complete</h2>
+    <p>All potholes have been successfully detected in the video.</p>
+    <button id="close-popup">Close</button>
+  </div>
+
+  <script>
+    document.getElementById('file-upload').addEventListener('change', function() {
+      document.getElementById('file-name-display').textContent =
+        this.files[0]?.name || 'No file chosen';
+    });
+
+    document.getElementById('login-button').addEventListener('click', () => {
+      document.getElementById('login-page').style.display = 'none';
+      document.getElementById('capture-page').style.display = 'block';
+    });
+
+    document.getElementById('go-to-map-button').addEventListener('click', () => {
+      window.location.href = '/route-map';
+    });
+
+    document.getElementById('process-button').addEventListener('click', async () => {
+      const fileInput = document.getElementById('file-upload');
+      const file      = fileInput.files[0];
+      const status    = document.querySelectorAll('#status-message')[1];
+
+      if (!file) {
+        status.textContent = "Please select a video file.";
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('file', file);
+      status.textContent = "Processing video...";
+      document.getElementById('loading-spinner').style.display = 'inline-block';
+
+      try {
+        const response = await fetch('/upload', { method:'POST', body: formData });
+        if (!response.ok) {
+          const err = await response.text();
+          status.textContent = `Error: ${err}`;
+          return;
+        }
+
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+
+        const video  = document.getElementById('output-video');
+        video.src    = url;
+        video.style.display = 'block';
+        video.load();
+        video.play().catch(err => console.warn('Autoplay prevented:', err));
+
+        const dl = document.getElementById('download-link');
+        dl.href = url;
+        dl.style.display = 'inline-block';
+
+        
+      } catch (e) {
+        console.error(e);
+        status.textContent = "Upload failed.";
+      } finally {
+        document.getElementById('loading-spinner').style.display = 'none';
+        fileInput.value = '';
+        document.getElementById('file-name-display').textContent = 'No file chosen';
+      }
+    });
+
+    document.getElementById('close-popup').addEventListener('click', () => {
+      document.getElementById('popup').style.display = 'none';
+    });
+  </script>
+  
+</body>
+</html>
