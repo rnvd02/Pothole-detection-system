@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ORS Routing + Pothole Avoidance</title>
+
+  <!-- Leaflet CSS/JS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+
+  <!-- Turf.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+
+  <style>
+    body { margin:0; padding:0; }
+    #map { height:90vh; width:100%; }
+    #info {
+      position: absolute;
+      bottom: 10px; left: 10px;
+      background: rgba(255,255,255,0.9);
+      padding: 10px; border-radius: 5px;
+      font-family: sans-serif; z-index: 999;
+      line-height: 1.4; min-width: 220px;
+    }
+    #info div { margin:4px 0; }
+    #info b { display:inline-block; width:80px; }
+  </style>
+</head>
+<body>
+  <h2 style="text-align:center; margin:8px 0;">
+    Route Map with Pothole Avoidance
+  </h2>
+  <div id="map"></div>
+  <div id="info">
+    <div><b>Start:</b> —</div>
+    <div><b>End:</b> —</div>
+    <div><b>Distance:</b> —</div>
+    <div><b>Duration:</b> —</div>
+  </div>
+
+  <script>
+    const redIcon = L.icon({
+      iconUrl: 'https://maps.google.com/mapfiles/ms/icons/red-dot.png',
+      iconSize: [32, 32],
+      iconAnchor: [16, 32],
+      popupAnchor: [0, -32]
+    });
+
+    const potholes = {{ potholes | tojson | safe }};
+    console.log('Potholes:', potholes);
+
+    const map = L.map('map').setView([12.926387, 74.892817], 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const avoidFeatures = [];
+    const potholePolygons = [];
+
+    potholes.forEach(p => {
+      L.marker([p.lat, p.lng], { icon: redIcon })
+        .addTo(map)
+        .bindPopup(`Pothole<br>Confidence: ${p.confidence}`);
+
+      const boxSize = 0.0002;
+      const bounds = [
+        [p.lat - boxSize, p.lng - boxSize],
+        [p.lat + boxSize, p.lng + boxSize]
+      ];
+
+      L.rectangle(bounds, {
+        color: 'red', weight: 1, fillOpacity: 0.6
+      }).addTo(map);
+
+      const poly = {
+      type: "Feature",
+      properties: {},
+      geometry: {
+        type: "Polygon",
+        coordinates: [[
+          [p.lng - boxSize, p.lat - boxSize],
+          [p.lng + boxSize, p.lat - boxSize],
+          [p.lng + boxSize, p.lat + boxSize],
+          [p.lng - boxSize, p.lat + boxSize],
+          [p.lng - boxSize, p.lat - boxSize]
+        ]]
+      }
+    };
+    potholePolygons.push(poly);
+  });
+
+    // Now merge all polygons into one with turf.union
+let mergedPolygon = potholePolygons[0];
+for (let i = 1; i < potholePolygons.length; i++) {
+  mergedPolygon = turf.union(mergedPolygon, potholePolygons[i]);
+}
+
+// The final avoid polygon as GeoJSON feature
+    const avoidPolygonGeoJSON = mergedPolygon.geometry;
+    let startMarker = null, endMarker = null, routeLayer = null;
+
+    const infoStart    = document.querySelector('#info div:nth-child(1)');
+    const infoEnd      = document.querySelector('#info div:nth-child(2)');
+    const infoDistance = document.querySelector('#info div:nth-child(3)');
+    const infoDuration = document.querySelector('#info div:nth-child(4)');
+
+    function updateRoute() {
+      if (startMarker) {
+        const s = startMarker.getLatLng();
+        startMarker.getPopup().setContent(
+          `Start<br>${s.lat.toFixed(6)}, ${s.lng.toFixed(6)}`
+        );
+        infoStart.innerHTML = `<b>Start:</b> ${s.lat.toFixed(6)}, ${s.lng.toFixed(6)}`;
+      } else {
+        infoStart.innerHTML = `<b>Start:</b> —`;
+      }
+
+      if (endMarker) {
+        const e = endMarker.getLatLng();
+        endMarker.getPopup().setContent(
+          `End<br>${e.lat.toFixed(6)}, ${e.lng.toFixed(6)}`
+        );
+        infoEnd.innerHTML = `<b>End:</b> ${e.lat.toFixed(6)}, ${e.lng.toFixed(6)}`;
+      } else {
+        infoEnd.innerHTML = `<b>End:</b> —`;
+      }
+
+      if (!(startMarker && endMarker)) {
+        infoDistance.innerHTML = `<b>Distance:</b> —`;
+        infoDuration.innerHTML = `<b>Duration:</b> —`;
+        return;
+      }
+
+      const s = startMarker.getLatLng();
+      const e = endMarker.getLatLng();
+
+      const body = {
+        coordinates: [[s.lng, s.lat], [e.lng, e.lat]],
+        options: {
+          avoid_polygons: avoidPolygonGeoJSON
+        }
+      };
+      // Only add avoid_polygons if mergedPolygon exists
+    if (mergedPolygon) {
+      body.options.avoid_polygons = mergedPolygon.geometry;
+    }
+
+      if (routeLayer) {
+        map.removeLayer(routeLayer);
+        routeLayer = null;
+      }
+
+      fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
+        method: 'POST',
+        headers: {
+          'Authorization': '5b3ce3597851110001cf6248e37ae943e3124d068a71ad36cbeab943',
+          'Content-Type':  'application/json',
+          'Accept':        'application/json, application/geo+json'
+        },
+        body: JSON.stringify(body)
+      })
+      .then(r => r.json().then(j => ({ code: r.status, body: j })))
+      .then(({ code, body }) => {
+        if (code !== 200 || !body.features?.length) {
+          alert('No safe route found. You may be forced through potholes.');
+          return;
+        }
+        routeLayer = L.geoJSON(body, {
+          style: { color:'blue', weight:5 }
+        }).addTo(map);
+
+        map.fitBounds(routeLayer.getBounds(), { padding:[20,20] });
+
+        const summary = body.features[0].properties.summary;
+        infoDistance.innerHTML = `<b>Distance:</b> ${(summary.distance/1000).toFixed(2)} km`;
+        infoDuration.innerHTML = `<b>Duration:</b> ${Math.round(summary.duration/60)} min`;
+      })
+      .catch(err => {
+        console.error(err);
+        alert('Routing failed – check network or quota.');
+      });
+    }
+
+    map.on('click', e => {
+      if (!startMarker) {
+        startMarker = L.marker(e.latlng, { draggable:true })
+          .addTo(map)
+          .bindPopup('Start').openPopup();
+        startMarker.on('dragend', updateRoute);
+      }
+      else if (!endMarker) {
+        endMarker = L.marker(e.latlng, { draggable:true })
+          .addTo(map)
+          .bindPopup('End').openPopup();
+        endMarker.on('dragend', updateRoute);
+        updateRoute();
+      }
+      else {
+        alert('Both markers placed. Reload the page to start over.');
+      }
+      updateRoute();
+    });
+  </script>
+</body>
+</html>
